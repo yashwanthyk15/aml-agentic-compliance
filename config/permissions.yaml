@@ -1,0 +1,40 @@
+resource_permissions:
+  transactions:
+    full: "Access all transactions"
+    flagged_only: "Access only flagged/alerted transactions"
+    scoped: "Access only transactions within assigned portfolio"
+    denied: "No transaction access"
+
+  customer_pii:
+    full: "Full PII access including identity documents"
+    masked: "Masked PII - partial values only"
+    denied: "No PII access"
+
+  alerts:
+    full: "Full alert access"
+    audit_view: "Audit-safe alert view (no raw PII)"
+    scoped: "Alerts within assigned portfolio only"
+    denied: "No alert access"
+
+  investigations:
+    full: "Full investigation access"
+    audit_view: "Audit-safe investigation view"
+    denied: "No investigation access"
+
+  recommendations:
+    full: "Full recommendation access"
+    read_only: "Read recommendations, cannot modify"
+    audit_view: "Audit-safe recommendation view"
+    denied: "No recommendation access"
+
+  audit:
+    full: "Full audit trail access"
+    scoped: "Audit trail within permitted scope"
+    denied: "No audit access"
+
+  regulations:
+    full: "Full regulatory document access"
+
+  feedback:
+    full: "Submit and view feedback"
+    denied: "No feedback access"

@@ -1,0 +1,51 @@
+llm:
+  provider: gemini
+  model: gemini-2.0-flash
+  max_retries: 2
+  initial_backoff_seconds: 1
+  backoff_multiplier: 2
+  max_backoff_seconds: 8
+
+embeddings:
+  model: all-MiniLM-L6-v2
+  dimension: 384
+
+qdrant:
+  collection_name: regulatory_chunks
+  url: http://localhost:6333
+
+database:
+  url: postgresql://aml_user:aml_pass_dev@localhost:5432/aml_compliance
+
+sanctions:
+  fuzzy:
+    strong_candidate: 0.90
+    potential_candidate: 0.85
+
+feedback:
+  multipliers:
+    TRUE_HIT: 1.50
+    FALSE_POSITIVE: 0.70
+    ESCALATED: 1.20
+
+screening:
+  structuring:
+    threshold_amount: 50000
+    window_hours: 24
+    min_transactions: 3
+  velocity:
+    max_transactions_24h: 10
+    max_transactions_7d: 30
+  geographic:
+    high_risk_countries:
+      - AF
+      - IR
+      - KP
+      - SY
+      - YE
+
+agent_runtime:
+  max_retries: 2
+  initial_backoff_seconds: 1
+  backoff_multiplier: 2
+  max_backoff_seconds: 8

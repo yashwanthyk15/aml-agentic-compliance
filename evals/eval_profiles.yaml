@@ -1,0 +1,15 @@
+profiles:
+  - profile_id: PROFILE_01_CCO
+    role: CCO
+    admin: true
+    description: Full compliance officer access.
+
+  - profile_id: PROFILE_02_AML_ANALYST
+    role: AML_ANALYST
+    admin: false
+    description: Operational AML access with masked PII.
+
+  - profile_id: PROFILE_03_EXTERNAL_AUDITOR
+    role: EXTERNAL_AUDITOR
+    admin: false
+    description: Audit-only access without raw customer/transaction PII.

@@ -1,0 +1,57 @@
+roles:
+  CCO:
+    display_name: Chief Compliance Officer
+    admin: true
+    permissions:
+      transactions: full
+      customer_pii: full
+      alerts: full
+      investigations: full
+      recommendations: full
+      audit: full
+      regulations: full
+      feedback: full
+      sar_metadata: full
+
+  AML_ANALYST:
+    display_name: AML Analyst
+    admin: false
+    permissions:
+      transactions: flagged_only
+      customer_pii: masked
+      alerts: full
+      investigations: full
+      recommendations: read_only
+      audit: scoped
+      regulations: full
+      feedback: full
+      sar_metadata: denied
+
+  EXTERNAL_AUDITOR:
+    display_name: External Auditor
+    admin: false
+    permissions:
+      transactions: denied
+      customer_pii: denied
+      alerts: audit_view
+      investigations: audit_view
+      recommendations: audit_view
+      audit: full
+      regulations: full
+      feedback: denied
+      sar_metadata: denied
+
+  RELATIONSHIP_MANAGER:
+    display_name: Relationship Manager
+    admin: false
+    scope: own_portfolio
+    permissions:
+      transactions: scoped
+      customer_pii: masked
+      alerts: scoped
+      investigations: denied
+      recommendations: denied
+      audit: denied
+      regulations: full
+      feedback: denied
+      sar_metadata: denied
