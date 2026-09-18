@@ -79,6 +79,8 @@ class ScreeningRuleEngine:
                     signals.append(DeterministicSignal(
                         rule_id='STRUCT_001',
                         rule_name='Structuring Detection',
+                        rule_type='INTERNAL_DEMO_RULE',
+                        description=f'Multiple sub-threshold transactions totaling {window_sum:.0f} within 24h window',
                         triggered=True,
                         details={
                             "customer_id": cust_id,
@@ -120,6 +122,8 @@ class ScreeningRuleEngine:
                     signals.append(DeterministicSignal(
                         rule_id='VELOCITY_001',
                         rule_name='Velocity Anomaly',
+                        rule_type='INTERNAL_DEMO_RULE',
+                        description=f'High velocity: {count_24h} txns/24h or {count_7d} txns/7d',
                         triggered=True,
                         details={
                             "customer_id": cust_id,
@@ -133,12 +137,17 @@ class ScreeningRuleEngine:
     def _check_geo(self, transactions: list[dict]) -> list[DeterministicSignal]:
         signals = []
         for tx in transactions:
-            dest_country = tx.get('destination_country', '')
+            dest_country = tx.get('destination_country', '') or tx.get('country', '')
             src_country = tx.get('source_country', '')
-            if dest_country in self.thresholds["high_risk_countries"] or src_country in self.thresholds["high_risk_countries"]:
+            matched = dest_country if dest_country in self.thresholds["high_risk_countries"] else ""
+            if not matched and src_country in self.thresholds["high_risk_countries"]:
+                matched = src_country
+            if matched:
                 signals.append(DeterministicSignal(
                     rule_id='GEO_001',
                     rule_name='Geographic Anomaly',
+                    rule_type='INTERNAL_DEMO_RULE',
+                    description=f'Transaction involves high-risk country: {matched}',
                     triggered=True,
                     details={
                         "transaction_id": tx.get('transaction_id'),
@@ -162,6 +171,8 @@ class ScreeningRuleEngine:
                 signals.append(DeterministicSignal(
                     rule_id='AMOUNT_001',
                     rule_name='Unusual Amount',
+                    rule_type='INTERNAL_DEMO_RULE',
+                    description=f'Amount {amt:.0f} exceeds {threshold:.0f} ({self.thresholds["amount_multiplier"]}x customer average)',
                     triggered=True,
                     details={
                         "transaction_id": tx.get('transaction_id'),
@@ -179,6 +190,8 @@ class ScreeningRuleEngine:
                 signals.append(DeterministicSignal(
                     rule_id='COUNTERPARTY_001',
                     rule_name='Counterparty Anomaly',
+                    rule_type='INTERNAL_DEMO_RULE',
+                    description=f'New counterparty with high-value transaction ({float(tx.get("amount", 0)):.0f})',
                     triggered=True,
                     details={
                         "transaction_id": tx.get('transaction_id'),
