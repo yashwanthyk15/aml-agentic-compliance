@@ -63,7 +63,7 @@ def build_user_context(role: str, profile_id: str | None = None, portfolio_id: s
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AML Agentic Compliance System — CLI Query Interface",
+        description="AML Agentic Compliance System  CLI Query Interface",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
@@ -126,7 +126,7 @@ def main() -> None:
             print(f"{'-'*60}")
             print("  [DOCS] Regulatory Sources:")
             for ev in state.authorized_data.regulatory_evidence[:5]:
-                print(f"     * {ev.document_id} — {ev.section or 'N/A'} — p.{ev.page or '?'}")
+                print(f"     * {ev.document_id}  {ev.section or 'N/A'}  p.{ev.page or '?'}")
 
         if state.authorized_data.sanctions_candidates:
             print(f"\n  [SEARCH] Sanctions Candidates:")

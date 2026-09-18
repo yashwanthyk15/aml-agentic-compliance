@@ -1,15 +1,15 @@
 """
-Pipeline orchestrator — the central coordinator.
+Pipeline orchestrator  the central coordinator.
 
 Wires together authorization, routing, agents, policy validation,
-and audit logging into a single request→response pipeline.
+and audit logging into a single requestresponse pipeline.
 
     state = orchestrator.run(query, user_context)
 
 The pipeline is intentionally linear (no graph/DAG framework needed):
 
-    authorize → filter → route → screen → investigate → recommend
-    → validate → render → audit
+    authorize  filter  route  screen  investigate  recommend
+     validate  render  audit
 """
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ class Orchestrator:
             if scan.detected:
                 self._audit.log_injection_detected(state, "user_query", scan.patterns_matched)
                 log.warning("injection_in_query", patterns=scan.patterns_matched)
-                # we still proceed — the injection detector flags it but the
+                # we still proceed  the injection detector flags it but the
                 # trust boundary prevents it from being treated as an instruction
 
             # 3. authorization gate
@@ -329,7 +329,7 @@ class Orchestrator:
             state.completed_stages.append("feedback")
             return state
 
-        # full pipeline: screen → investigate → recommend → validate
+        # full pipeline: screen  investigate  recommend  validate
         state = self._run_full_pipeline(state)
         return state
 
@@ -346,7 +346,7 @@ class Orchestrator:
 
         # build context from evidence
         evidence_text = "\n\n".join(
-            f"[{e.document_id} — {e.section or 'N/A'} — p.{e.page or '?'}]\n{e.text_excerpt}"
+            f"[{e.document_id}  {e.section or 'N/A'}  p.{e.page or '?'}]\n{e.text_excerpt}"
             for e in evidence
         )
 
@@ -389,7 +389,7 @@ class Orchestrator:
         perms = self._rbac.get_permitted_resources(state.user_context.role)
         lines = [f"Access permissions for role '{state.user_context.role}':"]
         for resource, level in perms.items():
-            lines.append(f"  • {resource}: {level}")
+            lines.append(f"   {resource}: {level}")
         return "\n".join(lines)
 
     def _run_full_pipeline(self, state: AgentState) -> AgentState:
@@ -474,7 +474,7 @@ class Orchestrator:
 
         if state.investigation_result:
             inv = state.investigation_result
-            parts.append(f"\n🔎 Investigation: {inv.investigation_id}")
+            parts.append(f"\n[INVESTIGATE] Investigation: {inv.investigation_id}")
             parts.append(f"   Confidence: {inv.confidence:.0%}")
             if inv.supporting_evidence:
                 parts.append(f"   Supporting: {'; '.join(inv.supporting_evidence[:3])}")
@@ -487,7 +487,7 @@ class Orchestrator:
 
         if state.recommendation:
             rec = state.recommendation
-            parts.append(f"\n📋 Recommendation: {rec.suggested_action.value}")
+            parts.append(f"\n[RECOMMEND] Recommendation: {rec.suggested_action.value}")
             parts.append(f"   Confidence: {rec.confidence:.0%}")
             parts.append(f"   Rationale: {rec.rationale}")
 

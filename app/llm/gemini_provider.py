@@ -53,6 +53,13 @@ class GeminiProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> T | str:
+        
+        # Inject the schema into the system prompt to guide the model
+        if response_schema is not None:
+            import json
+            schema_json = json.dumps(response_schema.model_json_schema(), indent=2)
+            system_prompt = f"{system_prompt}\n\nREQUIRED JSON SCHEMA:\n{schema_json}"
+
         raw = self._call_with_retry(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
