@@ -4,6 +4,13 @@ A local-first, multi-agent AML investigation and regulatory compliance system fo
 
 **GitHub Repository:** https://github.com/yashwanthyk15/aml-agentic-compliance
 
+## Walkthrough Videos
+
+- [Walkthrough Video 1](https://drive.google.com/file/d/187xRfTGgENI_DaLPWM8-fynoIvE14YF2/view?usp=sharing)
+- [Walkthrough Video 2](https://drive.google.com/file/d/115jnpH5-XQR4EdTk4JKVcnf7CbtbAdJl/view?usp=sharing)
+
+
+
 ## Architecture
 
 ```
