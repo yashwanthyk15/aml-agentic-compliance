@@ -37,7 +37,7 @@ from app.orchestration.state import UserContext
 
 log = structlog.get_logger(__name__)
 
-# shorthand role → profile mapping
+# shorthand role -> profile mapping
 _DEFAULT_PROFILES = {
     "CCO": ("PROFILE_01_CCO", True),
     "AML_ANALYST": ("PROFILE_02_AML_ANALYST", False),
@@ -85,7 +85,7 @@ def main() -> None:
         structlog.configure(
             processors=[
                 structlog.stdlib.add_log_level,
-                structlog.stdlib.filter_by_level,
+                
                 structlog.dev.ConsoleRenderer(),
             ],
             wrapper_class=structlog.stdlib.BoundLogger,
@@ -105,33 +105,33 @@ def main() -> None:
         orchestrator = Orchestrator()
         state = orchestrator.run(args.query, user_ctx)
     except Exception as exc:
-        print(f"\n  ❌ System error: {exc}")
+        print(f"\n  [FAIL] System error: {exc}")
         sys.exit(1)
 
     if args.json:
         print(json.dumps(state.model_dump(mode="json"), indent=2, default=str))
     else:
-        print(f"{'─'*60}")
+        print(f"{'-'*60}")
         print(f"  Status: {state.status.value}")
-        print(f"  Stages: {' → '.join(state.completed_stages)}")
+        print(f"  Stages: {' -> '.join(state.completed_stages)}")
         if state.missing_stages:
             print(f"  Missing: {', '.join(state.missing_stages)}")
-        print(f"{'─'*60}")
+        print(f"{'-'*60}")
         print()
         print(state.response_text)
         print()
 
         # show evidence sources
         if state.authorized_data.regulatory_evidence:
-            print(f"{'─'*60}")
-            print("  📚 Regulatory Sources:")
+            print(f"{'-'*60}")
+            print("  [DOCS] Regulatory Sources:")
             for ev in state.authorized_data.regulatory_evidence[:5]:
-                print(f"     • {ev.document_id} — {ev.section or 'N/A'} — p.{ev.page or '?'}")
+                print(f"     * {ev.document_id} — {ev.section or 'N/A'} — p.{ev.page or '?'}")
 
         if state.authorized_data.sanctions_candidates:
-            print(f"\n  🔍 Sanctions Candidates:")
+            print(f"\n  [SEARCH] Sanctions Candidates:")
             for sc in state.authorized_data.sanctions_candidates[:5]:
-                print(f"     • {sc.matched_name} ({sc.match_state.value}, score={sc.match_score:.2f})")
+                print(f"     * {sc.matched_name} ({sc.match_state.value}, score={sc.match_score:.2f})")
 
         print(f"\n{'='*60}\n")
 

@@ -63,7 +63,7 @@ if st.button("Submit Query", type="primary"):
                 st.markdown(f"**Completed Stages:** `{' → '.join(state.completed_stages)}`")
                 
                 if state.errors:
-                    st.error(f"Pipeline Errors: {', '.join(state.errors)}")
+                    st.error(f"Pipeline Errors: {', '.join([str(e) for e in state.errors])}")
                 
                 st.write("### Agent Response")
                 st.write(state.response_text)

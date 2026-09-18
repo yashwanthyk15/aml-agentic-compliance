@@ -464,7 +464,7 @@ class Orchestrator:
 
         if state.screening_alert:
             alert = state.screening_alert
-            parts.append(f"🔍 Screening Alert: {alert.alert_id}")
+            parts.append(f"[SEARCH] Screening Alert: {alert.alert_id}")
             parts.append(f"   Severity: {alert.severity.value}")
             parts.append(f"   Confidence: {alert.confidence:.0%}")
             if alert.triggered_indicators:
@@ -493,12 +493,12 @@ class Orchestrator:
 
         if state.policy_validation:
             pv = state.policy_validation
-            parts.append(f"\n✅ Policy Validation: {pv.result.value}")
+            parts.append(f"\n[PASS] Policy Validation: {pv.result.value}")
             if pv.reasons:
                 parts.append(f"   Reasons: {'; '.join(pv.reasons)}")
 
         if state.errors:
-            parts.append(f"\n⚠️  Errors: {len(state.errors)}")
+            parts.append(f"\n[WARN]  Errors: {len(state.errors)}")
             for err in state.errors:
                 parts.append(f"   [{err.code}] {err.message}")
 
