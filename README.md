@@ -2,6 +2,8 @@
 
 A local-first, multi-agent AML investigation and regulatory compliance system for a bank's compliance desk. The system ingests public regulatory PDFs, synthetic transaction data, and OFAC sanctions lists, then routes natural-language queries through three cooperating agents with data-layer RBAC, PII masking, and a feedback-driven ranking loop.
 
+**GitHub Repository:** https://github.com/yashwanthyk15/aml-agentic-compliance
+
 ## Architecture
 
 ```
