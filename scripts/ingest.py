@@ -59,12 +59,12 @@ def main():
     
     # 5. Sanctions Ingestion
     log.info("Ingesting OFAC SDN list")
-    sanctions_dir = raw_dir / "sanctions"
-    if sanctions_dir.exists():
-        screener = SanctionsScreener()
-        screener.load_ofac_sdn(sanctions_dir)
+    sanctions_zip = raw_dir / "sanctions" / "sdn_enhanced.zip"
+    if sanctions_zip.exists():
+        screener = SanctionsScreener.from_xml(sanctions_zip)
+        log.info("Loaded sanctions", count=len(screener.entries))
     else:
-        log.warning("Sanctions directory not found, skipping", path=str(sanctions_dir))
+        log.warning("Sanctions zip not found, skipping", path=str(sanctions_zip))
         
     log.info("Ingestion pipeline completed successfully")
 
