@@ -51,7 +51,7 @@ def create_llm_provider(provider_name: str | None = None) -> LLMProvider:
             )
         return GeminiProvider(
             api_key=api_key,
-            model=os.getenv("GEMINI_MODEL") or llm_cfg.get("model", "gemini-2.0-flash"),
+            model=os.getenv("GEMINI_MODEL") or llm_cfg.get("model", "gemini-2.5-flash"),
             max_retries=runtime_cfg.get("max_retries", 2),
             initial_backoff=runtime_cfg.get("initial_backoff_seconds", 1.0),
             backoff_multiplier=runtime_cfg.get("backoff_multiplier", 2.0),

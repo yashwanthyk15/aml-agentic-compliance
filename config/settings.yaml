@@ -1,6 +1,6 @@
 llm:
   provider: gemini
-  model: gemini-2.0-flash
+  model: gemini-2.5-flash
   max_retries: 2
   initial_backoff_seconds: 1
   backoff_multiplier: 2
