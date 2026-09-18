@@ -1,11 +1,24 @@
-import yaml
-from pathlib import Path
-from enum import Enum
-from pydantic import BaseModel
-import structlog
-from typing import Optional, Dict
+"""
+RBAC engine — role-based access control enforced at the data layer.
 
-logger = structlog.get_logger(__name__)
+Reads role definitions from config/roles.yaml and PII rules from
+config/pii_fields.yaml.  Authorization decisions happen BEFORE data
+retrieval — the LLM never sees unauthorized content.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+import structlog
+import yaml
+from pydantic import BaseModel
+
+log = structlog.get_logger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class FieldAccessLevel(Enum):
     ALLOW = "ALLOW"
@@ -13,78 +26,119 @@ class FieldAccessLevel(Enum):
     DENY = "DENY"
     ALLOW_SCOPED = "ALLOW_SCOPED"
 
+
 class AuthorizationDecision(BaseModel):
     allowed: bool
     reason: str
     resource_type: str
     access_level: str
 
+
 class RBACEngine:
-    def __init__(self):
-        self._roles: Dict = {}
-        self._pii_fields: Dict = {}
+    """Config-driven role-based access control."""
+
+    def __init__(self, config_dir: Path | None = None):
+        self._config_dir = config_dir or (_PROJECT_ROOT / "config")
+        self._roles: dict[str, dict] = {}
+        self._pii_fields: dict[str, dict] = {}
         self._load_configs()
 
-    def _get_project_root(self) -> Path:
-        current_dir = Path(__file__).parent
-        while current_dir != current_dir.parent:
-            if (current_dir / "config").is_dir():
-                return current_dir
-            current_dir = current_dir.parent
-        # Fallback if config is not found
-        return Path(__file__).parent.parent.parent
-
-    def _load_configs(self):
-        root = self._get_project_root()
-        roles_path = root / "config" / "roles.yaml"
-        pii_path = root / "config" / "pii_fields.yaml"
+    def _load_configs(self) -> None:
+        roles_path = self._config_dir / "roles.yaml"
+        pii_path = self._config_dir / "pii_fields.yaml"
 
         if roles_path.exists():
-            with open(roles_path, "r", encoding="utf-8") as f:
-                self._roles = yaml.safe_load(f) or {}
+            with open(roles_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            self._roles = data.get("roles", {})
         else:
-            logger.warning("roles.yaml not found", path=str(roles_path))
-            
-        if pii_path.exists():
-            with open(pii_path, "r", encoding="utf-8") as f:
-                self._pii_fields = yaml.safe_load(f) or {}
-        else:
-            logger.warning("pii_fields.yaml not found", path=str(pii_path))
+            log.warning("roles_config_missing", path=str(roles_path))
 
-    def authorize(self, user_role: str, resource_type: str, resource_id: Optional[str] = None, portfolio_id: Optional[str] = None) -> AuthorizationDecision:
-        role_config = self._roles.get(user_role, {})
-        resources = role_config.get("resources", {})
-        
-        if resource_type not in resources:
-            return AuthorizationDecision(allowed=False, reason="Resource type not permitted", resource_type=resource_type, access_level="DENY")
-        
-        access_level = resources[resource_type]
-        
-        if access_level == "ALLOW":
-            return AuthorizationDecision(allowed=True, reason="Full access granted", resource_type=resource_type, access_level=access_level)
-        elif access_level == "ALLOW_SCOPED":
-            return AuthorizationDecision(allowed=True, reason="Scoped access granted", resource_type=resource_type, access_level=access_level)
-        
-        return AuthorizationDecision(allowed=False, reason="Access denied", resource_type=resource_type, access_level="DENY")
+        if pii_path.exists():
+            with open(pii_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            self._pii_fields = data.get("fields", {})
+        else:
+            log.warning("pii_config_missing", path=str(pii_path))
+
+    def authorize(
+        self,
+        user_role: str,
+        resource_type: str,
+        resource_id: str | None = None,
+        portfolio_id: str | None = None,
+    ) -> AuthorizationDecision:
+        """Check whether a role can access a resource type."""
+        role_cfg = self._roles.get(user_role, {})
+        if not role_cfg:
+            return AuthorizationDecision(
+                allowed=False,
+                reason=f"Unknown role: {user_role}",
+                resource_type=resource_type,
+                access_level="DENY",
+            )
+
+        permissions = role_cfg.get("permissions", {})
+        access = permissions.get(resource_type)
+
+        if access is None:
+            return AuthorizationDecision(
+                allowed=False,
+                reason=f"Role '{user_role}' has no permission for '{resource_type}'",
+                resource_type=resource_type,
+                access_level="DENY",
+            )
+
+        # denied access levels
+        if access == "denied":
+            return AuthorizationDecision(
+                allowed=False,
+                reason=f"Access to '{resource_type}' is denied for role '{user_role}'",
+                resource_type=resource_type,
+                access_level="DENY",
+            )
+
+        # scoped access needs portfolio check for RM
+        if access == "scoped" and user_role == "RELATIONSHIP_MANAGER" and not portfolio_id:
+            return AuthorizationDecision(
+                allowed=False,
+                reason="Scoped access requires a portfolio_id",
+                resource_type=resource_type,
+                access_level="DENY",
+            )
+
+        return AuthorizationDecision(
+            allowed=True,
+            reason=f"Access granted ({access})",
+            resource_type=resource_type,
+            access_level=access,
+        )
 
     def get_field_access(self, user_role: str, field_name: str) -> FieldAccessLevel:
-        role_config = self._roles.get(user_role, {})
-        fields = role_config.get("fields", {})
-        
-        if field_name in fields:
-            try:
-                return FieldAccessLevel(fields[field_name])
-            except ValueError:
-                return FieldAccessLevel.DENY
-                
-        pii_rule = self._pii_fields.get(field_name)
-        if pii_rule:
-            return FieldAccessLevel.MASK_PARTIAL
-            
-        return FieldAccessLevel.ALLOW
+        """Return the access level for a specific PII field and role."""
+        field_cfg = self._pii_fields.get(field_name, {})
+        if not field_cfg:
+            return FieldAccessLevel.ALLOW  # non-PII fields are open
 
-    def get_permitted_resources(self, user_role: str) -> Dict[str, str]:
-        return self._roles.get(user_role, {}).get("resources", {})
+        role_access = field_cfg.get(user_role)
+        if role_access is None:
+            # if the field is classified as PII but no rule for this role, deny
+            classification = field_cfg.get("classification", "")
+            if "PII" in classification.upper() or "RESTRICTED" in classification.upper():
+                return FieldAccessLevel.DENY
+            return FieldAccessLevel.ALLOW
+
+        try:
+            return FieldAccessLevel(role_access)
+        except ValueError:
+            log.warning("unknown_access_level", field=field_name, role=user_role, level=role_access)
+            return FieldAccessLevel.DENY
+
+    def get_permitted_resources(self, user_role: str) -> dict[str, str]:
+        """Return the permission map for a role."""
+        role_cfg = self._roles.get(user_role, {})
+        return role_cfg.get("permissions", {})
 
     def is_admin(self, user_role: str) -> bool:
-        return self._roles.get(user_role, {}).get("is_admin", False)
+        role_cfg = self._roles.get(user_role, {})
+        return role_cfg.get("admin", False)

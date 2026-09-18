@@ -12,14 +12,22 @@ class MaskingEngine:
     def mask_record(self, record: Dict[str, Any], user_role: str, record_type: str = 'customer') -> Dict[str, Any]:
         masked_record = {}
         for key, value in record.items():
+            # try dotted field name first (e.g., customer.full_name), then bare field name
+            dotted_key = f"{record_type}.{key}"
+            access = self.rbac_engine.get_field_access(user_role, dotted_key)
+            if access == FieldAccessLevel.DENY:
+                access_bare = self.rbac_engine.get_field_access(user_role, key)
+                if access_bare == FieldAccessLevel.DENY:
+                    continue  # field excluded entirely
+                access = access_bare
+
             if isinstance(value, str):
-                masked_val = self.mask_value(value, key, user_role)
-                if masked_val is not None:
-                    masked_record[key] = masked_val
+                if access == FieldAccessLevel.MASK_PARTIAL:
+                    masked_record[key] = self._apply_partial_mask(value, key)
+                elif access in (FieldAccessLevel.ALLOW, FieldAccessLevel.ALLOW_SCOPED):
+                    masked_record[key] = value
+                # DENY already handled above
             else:
-                access = self.rbac_engine.get_field_access(user_role, key)
-                if access == FieldAccessLevel.DENY:
-                    continue
                 masked_record[key] = value
         return masked_record
 

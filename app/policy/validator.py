@@ -1,77 +1,89 @@
+"""
+Policy Validator — deterministic safety checks.
+
+This is NOT an LLM agent. It applies hard-coded policy rules to the
+pipeline output and can override the recommendation to MANUAL_REVIEW
+when safety conditions are met.
+"""
 import structlog
+
 from app.orchestration.state import (
-    AgentState, PolicyValidation, PolicyResult, PipelineStatus, SanctionsMatchState
+    AgentState,
+    PipelineStatus,
+    PolicyResult,
+    PolicyValidation,
+    RecommendedAction,
+    SanctionsMatchState,
 )
 
-logger = structlog.get_logger(__name__)
+log = structlog.get_logger(__name__)
+
 
 class PolicyValidator:
-    def __init__(self):
-        self.stage_name = "policy_validation"
+    """Deterministic policy validator — no LLM calls."""
 
     def validate(self, state: AgentState) -> AgentState:
-        """Apply deterministic safety rules to the recommendation."""
-        logger.info("Starting policy validation", query_id=state.query_id)
-        
-        reasons = []
-        requires_manual_review = False
-        
-        # Rule 1: No investigation_result
+        """Apply safety rules and produce a PolicyValidation."""
+        log.info("policy_validation_started", request_id=state.request_id[:8])
+
+        reasons: list[str] = []
+
+        # Rule 1: missing investigation
         if not state.investigation_result:
-            requires_manual_review = True
             reasons.append("Investigation stage incomplete")
-            
-        # Rule 2: No recommendation
+
+        # Rule 2: missing recommendation
         if not state.recommendation:
-            requires_manual_review = True
             reasons.append("Recommendation stage incomplete")
-            
-        # Rule 3: Low confidence recommendation
+
+        # Rule 3: low confidence
         if state.recommendation and state.recommendation.confidence < 0.5:
-            requires_manual_review = True
             reasons.append("Low confidence recommendation")
-            
-        # Rule 4: Sanctions match
-        if state.authorized_data and state.authorized_data.sanctions_candidates:
-            for candidate in state.authorized_data.sanctions_candidates:
-                if candidate.match_state in (SanctionsMatchState.STRONG_POTENTIAL_MATCH, SanctionsMatchState.CONFIRMED_MATCH):
-                    requires_manual_review = True
+
+        # Rule 4: strong sanctions match
+        if state.authorized_data.sanctions_candidates:
+            for sc in state.authorized_data.sanctions_candidates:
+                if sc.match_state in (
+                    SanctionsMatchState.STRONG_POTENTIAL_MATCH,
+                    SanctionsMatchState.CONFIRMED_SOURCE_SUPPORTED_MATCH,
+                ):
                     reasons.append("Potential sanctions match requires human review")
                     break
-                    
-        # Rule 5: Conflicting evidence
+
+        # Rule 5: conflicting evidence
         if state.investigation_result:
-            has_strong_supporting = bool(state.investigation_result.supporting_evidence)
-            has_strong_contradictory = bool(state.investigation_result.contradictory_evidence)
-            if has_strong_supporting and has_strong_contradictory:
-                requires_manual_review = True
+            has_supporting = len(state.investigation_result.supporting_evidence) > 0
+            has_contradictory = len(state.investigation_result.contradictory_evidence) > 0
+            if has_supporting and has_contradictory:
                 reasons.append("Conflicting evidence")
-                
-        # Rule 6: Pipeline errors
+
+        # Rule 6: pipeline errors
         if state.errors:
-            requires_manual_review = True
             reasons.append("Pipeline errors encountered")
 
-        # Apply results
-        if requires_manual_review:
-            logger.warning("Policy validation failed, manual review required", reasons=reasons)
-            state.status = PipelineStatus.MANUAL_REVIEW_REQUIRED
-            
-            validation = PolicyValidation(
+        # build the validation result
+        if reasons:
+            original = state.recommendation.suggested_action if state.recommendation else None
+            overridden = (
+                RecommendedAction.MANUAL_REVIEW
+                if original and original != RecommendedAction.MANUAL_REVIEW
+                else None
+            )
+
+            state.policy_validation = PolicyValidation(
                 result=PolicyResult.MANUAL_REVIEW_REQUIRED,
-                reasoning="; ".join(reasons),
-                triggered_rules=reasons
+                reasons=reasons,
+                overridden_action=overridden,
+                original_action=original,
             )
+            state.status = PipelineStatus.MANUAL_REVIEW_REQUIRED
+            log.warning("policy_manual_review", reasons=reasons)
         else:
-            logger.info("Policy validation passed")
-            validation = PolicyValidation(
+            state.policy_validation = PolicyValidation(
                 result=PolicyResult.VALID,
-                reasoning="All policy rules passed.",
-                triggered_rules=[]
+                reasons=[],
             )
-            
-        state.policy_validation = validation
-        if self.stage_name not in state.completed_stages:
-            state.completed_stages.append(self.stage_name)
-            
+            log.info("policy_validation_passed")
+
+        state.completed_stages.append("policy_validation")
         return state

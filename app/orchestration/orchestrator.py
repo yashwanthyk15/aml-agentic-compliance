@@ -84,7 +84,7 @@ class Orchestrator:
         self._screening_rules = screening_rules
         self._sanctions = sanctions_screener
         self._injection = InjectionDetector()
-        self._trust = TrustBoundary()
+        self._trust = TrustBoundary(self._injection)
         self._validator = PolicyValidator()
         self._weighting = FeedbackWeightingEngine(self._feedback_store)
 
@@ -275,8 +275,17 @@ class Orchestrator:
                 # only return flagged transactions (those with alerts)
                 alerts_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "alerts.csv"
                 if alerts_path.exists():
+                    import json as _json
                     alerts_df = pd.read_csv(alerts_path)
-                    flagged_ids = set(alerts_df["transaction_id"].dropna().astype(str))
+                    flagged_ids = set()
+                    # alerts CSV has transaction_ids column with JSON arrays
+                    tid_col = "transaction_ids" if "transaction_ids" in alerts_df.columns else "transaction_id"
+                    for val in alerts_df[tid_col].dropna():
+                        try:
+                            parsed = _json.loads(str(val)) if str(val).startswith("[") else [str(val)]
+                            flagged_ids.update(str(x) for x in parsed)
+                        except (ValueError, TypeError):
+                            flagged_ids.add(str(val))
                     df = df[df["transaction_id"].astype(str).isin(flagged_ids)]
             elif txn_access == "scoped":
                 # RM: filter by portfolio

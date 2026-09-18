@@ -1,15 +1,25 @@
-import json
+"""
+Agent 3: Recommendation Engine
+
+Takes the ScreeningAlert + InvestigationResult and produces a
+constrained recommendation: ESCALATE, NO_ACTION, or MANUAL_REVIEW.
+
+This is decision SUPPORT, not decision authority. The output always
+sets requires_human_review=True.
+"""
 import structlog
-from typing import List
 from pydantic import BaseModel, Field
+
 from app.llm.base import LLMProvider
 from app.orchestration.state import (
-    AgentState, Recommendation, AgentError, RecommendedAction, PipelineStatus
+    AgentError, AgentState, PipelineStatus, Recommendation, RecommendedAction,
 )
 
-logger = structlog.get_logger(__name__)
+log = structlog.get_logger(__name__)
 
-SYSTEM_PROMPT = """You are an AML recommendation engine. Based on the screening alert and investigation findings, provide a recommendation for the compliance team.
+_SYSTEM_PROMPT = """\
+You are an AML recommendation engine. Based on the screening alert and investigation findings, \
+provide a recommendation for the compliance team.
 
 You may ONLY recommend one of:
 - ESCALATE: Strong evidence of compliance concern requiring senior review
@@ -22,87 +32,106 @@ Rules:
 - If evidence conflicts or is insufficient, recommend MANUAL_REVIEW
 - Consider historical feedback patterns when available
 - A potential sanctions match should generally lead to ESCALATE or MANUAL_REVIEW
-- Return structured output matching the required schema"""
+- Return a JSON object matching the schema below"""
+
 
 class RecommenderLLMResponse(BaseModel):
-    suggested_action: str = Field(description="Action to recommend: ESCALATE, NO_ACTION, or MANUAL_REVIEW")
-    rationale: str = Field(description="Reasoning for the recommendation")
-    evidence_summary: List[str] = Field(description="Summary of key evidence used")
-    confidence: float = Field(description="Confidence score (0.0 to 1.0)", ge=0.0, le=1.0)
-    key_factors: List[str] = Field(description="Key factors driving the decision")
+    suggested_action: str = Field(description="ESCALATE, NO_ACTION, or MANUAL_REVIEW")
+    rationale: str = Field(default="")
+    evidence_summary: list[str] = Field(default_factory=list)
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
+    key_factors: list[str] = Field(default_factory=list)
+
 
 class RecommendationEngine:
     def __init__(self, llm: LLMProvider):
         self.llm = llm
-        self.stage_name = "recommendation"
 
     def run(self, state: AgentState) -> AgentState:
-        """Produce a constrained recommendation based on screening + investigation."""
-        logger.info("Starting recommendation stage", query_id=state.query_id)
-        
-        if not state.screening_alert or not state.investigation_result:
-            error_msg = "Cannot run recommendation: screening_alert or investigation_result is missing."
-            logger.error(error_msg)
-            state.status = PipelineStatus.MANUAL_REVIEW_REQUIRED
-            state.errors.append(
-                AgentError(
-                    stage=self.stage_name,
-                    error_message=error_msg,
-                    details="Missing prerequisite stages."
-                )
-            )
+        """Produce a constrained recommendation."""
+        log.info("recommender_started", request_id=state.request_id[:8])
+
+        if not state.screening_alert:
+            log.warning("no_screening_alert_for_recommendation")
+            state.errors.append(AgentError(
+                code="NO_SCREENING_ALERT",
+                message="Cannot recommend without screening results.",
+                agent_name="RECOMMENDER",
+            ))
             return state
-            
+
         try:
-            # Build context
-            context_data = {
-                "screening_alert": state.screening_alert.model_dump(),
-                "investigation_result": state.investigation_result.model_dump(),
-                "feedback_history": state.authorized_data.feedback_history if state.authorized_data and hasattr(state.authorized_data, 'feedback_history') else []
-            }
-            
-            prompt = f"Provide a recommendation based on the following findings:\n\n{json.dumps(context_data, indent=2)}"
-            
-            # Call LLM
-            logger.debug("Calling LLM for recommendation")
+            user_prompt = self._build_prompt(state)
+
             response = self.llm.generate(
-                prompt=prompt,
-                system_prompt=SYSTEM_PROMPT,
-                response_model=RecommenderLLMResponse
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_schema=RecommenderLLMResponse,
             )
-            
-            # Map action
+
+            # parse the action (default to MANUAL_REVIEW if unrecognised)
             try:
                 action = RecommendedAction(response.suggested_action.upper())
             except ValueError:
-                logger.warning(f"Invalid suggested_action {response.suggested_action}, defaulting to MANUAL_REVIEW")
+                log.warning("unknown_action", raw=response.suggested_action)
                 action = RecommendedAction.MANUAL_REVIEW
 
-            # Create Recommendation
-            recommendation = Recommendation(
+            rec = Recommendation(
+                alert_id=state.screening_alert.alert_id,
+                investigation_id=(
+                    state.investigation_result.investigation_id
+                    if state.investigation_result else "N/A"
+                ),
                 suggested_action=action,
                 rationale=response.rationale,
                 evidence_summary=response.evidence_summary,
                 confidence=response.confidence,
-                key_factors=response.key_factors,
-                requires_human_review=True # Always set to True as per rules
+                requires_human_review=True,  # always
             )
-            
-            state.recommendation = recommendation
-            if self.stage_name not in state.completed_stages:
-                state.completed_stages.append(self.stage_name)
-            
-            logger.info("Recommendation completed successfully")
-            
-        except Exception as e:
-            logger.error("Error during recommendation", error=str(e))
+
+            state.recommendation = rec
+            state.completed_stages.append("recommendation")
+            log.info("recommender_completed", action=action.value, confidence=rec.confidence)
+
+        except Exception as exc:
+            log.error("recommender_failed", error=str(exc)[:200])
+            state.errors.append(AgentError(
+                code="RECOMMENDER_FAILURE",
+                message=str(exc)[:200],
+                retryable=False,
+                agent_name="RECOMMENDER",
+            ))
             state.status = PipelineStatus.MANUAL_REVIEW_REQUIRED
-            state.errors.append(
-                AgentError(
-                    stage=self.stage_name,
-                    error_message=str(e),
-                    details="Exception occurred during LLM recommendation phase."
-                )
-            )
-            
+
         return state
+
+    def _build_prompt(self, state: AgentState) -> str:
+        parts = [f"Alert: {state.screening_alert.alert_id}"]
+        parts.append(f"Severity: {state.screening_alert.severity.value}")
+        parts.append(f"Screener Confidence: {state.screening_alert.confidence:.2f}")
+
+        if state.screening_alert.triggered_indicators:
+            parts.append(f"Indicators: {', '.join(state.screening_alert.triggered_indicators)}")
+        if state.screening_alert.screener_reasoning:
+            parts.append(f"Screener Reasoning: {state.screening_alert.screener_reasoning}")
+
+        if state.investigation_result:
+            inv = state.investigation_result
+            parts.append(f"\nInvestigation Confidence: {inv.confidence:.2f}")
+            if inv.supporting_evidence:
+                parts.append(f"Supporting: {'; '.join(inv.supporting_evidence[:5])}")
+            if inv.contradictory_evidence:
+                parts.append(f"Contradictory: {'; '.join(inv.contradictory_evidence[:5])}")
+            if inv.missing_evidence:
+                parts.append(f"Missing: {'; '.join(inv.missing_evidence[:5])}")
+            if inv.assessment:
+                parts.append(f"Assessment: {inv.assessment}")
+            if inv.sanctions_assessment:
+                parts.append(f"Sanctions: {inv.sanctions_assessment}")
+
+        # historical feedback
+        fb = state.authorized_data.feedback_history
+        if fb:
+            parts.append(f"\nHistorical feedback: {len(fb)} prior dispositions available")
+
+        return "\n".join(parts)
