@@ -91,24 +91,26 @@ class RegulatoryRetriever:
         if must_conditions:
             query_filter = models.Filter(must=must_conditions)
             
-        results = self.client.search(
+        res = self.client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             query_filter=query_filter,
             limit=top_k
         )
+        results = res.points
         
         evidence_list = []
         for hit in results:
             payload = hit.payload or {}
             evidence = RegulatoryEvidence(
-                evidence_id=payload.get("chunk_id", str(uuid.uuid4())),
-                source_document=payload.get("document_name", "Unknown Document"),
-                document_id=payload.get("document_id"),
-                jurisdiction=payload.get("jurisdiction"),
-                excerpt=payload.get("text", ""),
-                relevance_score=hit.score,
-                page_reference=str(payload.get("page")) if payload.get("page") else None
+                chunk_id=payload.get("chunk_id", str(uuid.uuid4())),
+                document_id=payload.get("doc_id") or payload.get("document_id") or "FATF_REG",
+                document_version=payload.get("effective_date"),
+                section=payload.get("section_title") or payload.get("section"),
+                text_excerpt=payload.get("text", ""),
+                relevance_score=float(hit.score),
+                page=int(payload.get("page")) if payload.get("page") is not None else None,
+                jurisdiction=payload.get("jurisdiction", "FATF/GLOBAL")
             )
             evidence_list.append(evidence)
             

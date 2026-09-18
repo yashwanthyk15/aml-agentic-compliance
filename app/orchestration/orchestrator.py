@@ -80,7 +80,22 @@ class Orchestrator:
         self._masking = masking or MaskingEngine(self._rbac)
         self._feedback_store = feedback_store or FeedbackStore()
         self._audit = audit_logger or AuditLogger()
-        self._retriever = retriever
+        if retriever is None:
+            try:
+                from app.rag.retriever import RegulatoryRetriever
+                from app.rag.embeddings import EmbeddingEngine
+                emb = EmbeddingEngine()
+                self._retriever = RegulatoryRetriever(
+                    qdrant_url="http://localhost:6333",
+                    collection_name="regulations",
+                    embedding_engine=emb
+                )
+            except Exception as exc:
+                log.warning("retriever_init_failed", error=str(exc))
+                self._retriever = None
+        else:
+            self._retriever = retriever
+
         self._screening_rules = screening_rules
         self._sanctions = sanctions_screener
         self._injection = InjectionDetector()
