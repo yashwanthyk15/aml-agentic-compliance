@@ -55,7 +55,7 @@ def main():
         embedding_engine=embedder
     )
     retriever.ensure_collection()
-    retriever.index_documents(all_chunks)
+    retriever.index_chunks(all_chunks)
     
     # 5. Sanctions Ingestion
     log.info("Ingesting OFAC SDN list")
