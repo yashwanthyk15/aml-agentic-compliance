@@ -81,7 +81,7 @@ if st.button("Submit Query", type="primary"):
                     if state.authorized_data.regulatory_evidence:
                         for ev in state.authorized_data.regulatory_evidence:
                             st.markdown(f"**Document:** `{ev.document_id}` | **Page:** {ev.page or 'N/A'} | **Section:** {ev.section or 'N/A'}")
-                            st.caption(ev.text)
+                            st.caption(getattr(ev, 'text_excerpt', getattr(ev, 'excerpt', 'No excerpt text available.')))
                             st.divider()
                     else:
                         st.write("No regulatory evidence retrieved.")
