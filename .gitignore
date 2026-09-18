@@ -41,3 +41,8 @@ htmlcov/
 # Docker
 postgres_data/
 qdrant_data/
+
+# Walkthrough recordings (include separately in submission ZIP)
+*.mp4
+*.mov
+*.mkv
