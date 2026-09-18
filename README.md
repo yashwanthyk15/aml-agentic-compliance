@@ -132,7 +132,7 @@ the local fallback is sufficient. Then run
 `python scripts/generate_understanding.py` to create rule summaries, obligations,
 thresholds, schema notes, and the regulatory graph.
 
-The current verified local acceptance result is **38 tests passing** and **15/15
+The current verified local acceptance result is **39 tests passing** and **15/15
 evaluation cases passing**. The evaluator reports actual results and does not
 hard-code the pass rate.
 
@@ -233,7 +233,7 @@ The actual security boundary is `authorization + data filtering + trust labeling
 
 ### 2. Regulatory Retrieval — Vector Search Quality Degrades
 
-**Current:** ~500 regulatory chunks from 3 PDFs in local Qdrant.
+**Current:** ~1,250 regulatory chunks from 3 PDFs in local Qdrant.
 
 **At 100×:** Thousands of pages across dozens of jurisdictions, multiple versions per regulation, overlapping obligations.
 
@@ -270,7 +270,7 @@ The actual security boundary is `authorization + data filtering + trust labeling
 | Component | Technology | Why |
 |-----------|-----------|-----|
 | Language | Python 3.12 | Data tooling, Pydantic, LLM SDKs |
-| LLM | Google Gemini 2.0 Flash | Fast, structured output, free tier |
+| LLM | Configurable Google Gemini provider plus offline provider | Model-backed production mode with reproducible local evaluation |
 | Embeddings | all-MiniLM-L6-v2 (local) | No API cost, deterministic |
 | Vector DB | Qdrant (Docker) | Semantic search with metadata filtering |
 | Relational DB | PostgreSQL 16 (Docker) | Transactions, alerts, audit trail |
@@ -302,7 +302,7 @@ aml-agent-system/
 ├── scripts/             # Ingestion, seeding, demo scripts
 ├── sql/                 # Database schema
 ├── tests/               # pytest unit tests
-└── docs/                # Architecture, threat model
+└── docs/                # Architecture documentation
 ```
 
 ## License
