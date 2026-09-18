@@ -1,5 +1,5 @@
 llm:
-  provider: gemini
+  provider: offline
   model: gemini-3.6-flash
   max_retries: 2
   initial_backoff_seconds: 1

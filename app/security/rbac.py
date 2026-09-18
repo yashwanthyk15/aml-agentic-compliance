@@ -57,7 +57,7 @@ class RBACEngine:
         if pii_path.exists():
             with open(pii_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            self._pii_fields = data.get("fields", {})
+            self._pii_fields = data.get("fields", data.get("pii_fields", {}))
         else:
             log.warning("pii_config_missing", path=str(pii_path))
 

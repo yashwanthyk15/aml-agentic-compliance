@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import traceback
 import uuid
+import re
+import os
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from app.agents.investigator import InvestigationAgent
 from app.agents.recommender import RecommendationEngine
 from app.audit.logger import AuditLogger
 from app.feedback.store import FeedbackStore
+from app.feedback.store import amount_to_bucket, build_pattern_key, velocity_to_bucket
 from app.feedback.weighting import FeedbackWeightingEngine
 from app.llm.base import LLMProvider
 from app.llm.factory import create_llm_provider
@@ -35,6 +38,8 @@ from app.orchestration.state import (
     AgentState,
     AuthorizedData,
     DeterministicSignal,
+    Disposition,
+    FeedbackEvent,
     PipelineStatus,
     PolicyResult,
     QueryType,
@@ -80,24 +85,22 @@ class Orchestrator:
         self._masking = masking or MaskingEngine(self._rbac)
         self._feedback_store = feedback_store or FeedbackStore()
         self._audit = audit_logger or AuditLogger()
-        if retriever is None:
-            try:
-                from app.rag.retriever import RegulatoryRetriever
-                from app.rag.embeddings import EmbeddingEngine
-                emb = EmbeddingEngine()
-                self._retriever = RegulatoryRetriever(
-                    qdrant_url="http://localhost:6333",
-                    collection_name="regulations",
-                    embedding_engine=emb
-                )
-            except Exception as exc:
-                log.warning("retriever_init_failed", error=str(exc))
-                self._retriever = None
-        else:
-            self._retriever = retriever
+        self._retriever = retriever
+        self._retriever_initialized = retriever is not None
+        self._chunks_path = _PROJECT_ROOT / "data" / "processed" / "regulatory_chunks.jsonl"
+        self._sanctions_path = _PROJECT_ROOT / "data" / "raw" / "sanctions" / "sdn_enhanced.zip"
+        settings_path = _PROJECT_ROOT / "config" / "settings.yaml"
+        with open(settings_path, encoding="utf-8") as source:
+            self._settings = yaml.safe_load(source) or {}
 
-        self._screening_rules = screening_rules
+        if screening_rules is None:
+            from app.screening.rules import ScreeningRuleEngine
+            self._screening_rules = ScreeningRuleEngine()
+        else:
+            self._screening_rules = screening_rules
+
         self._sanctions = sanctions_screener
+        self._sanctions_initialized = sanctions_screener is not None
         self._injection = InjectionDetector()
         self._trust = TrustBoundary(self._injection)
         self._validator = PolicyValidator()
@@ -142,6 +145,12 @@ class Orchestrator:
 
             # 6. generate response text
             state.response_text = self._render_response(state)
+            if any(event.event_type == "INJECTION_DETECTED" for event in state.audit_events):
+                state.response_text = (
+                    "Security notice: instruction-like content was detected in the query or source data "
+                    "and was treated as untrusted data. It was not executed.\n\n"
+                    + state.response_text
+                )
 
         except Exception as exc:
             log.error("pipeline_error", error=str(exc)[:200])
@@ -161,6 +170,75 @@ class Orchestrator:
             status=state.status.value,
             stages=state.completed_stages,
             error_count=len(state.errors),
+        )
+        return state
+
+    def submit_feedback(
+        self,
+        *,
+        alert_id: str,
+        disposition: str | Disposition,
+        user_context: UserContext,
+        notes: str | None = None,
+    ) -> AgentState:
+        """Submit an authorized analyst disposition for an existing alert."""
+        state = AgentState(
+            user_context=user_context,
+            query=f"Submit feedback for {alert_id}",
+            query_type=QueryType.FEEDBACK,
+        )
+        self._audit.log_query_received(state)
+
+        auth = self._rbac.authorize(user_context.role, "feedback")
+        if not auth.allowed:
+            self._deny(state, auth.reason)
+            return state
+
+        try:
+            parsed_disposition = (
+                disposition
+                if isinstance(disposition, Disposition)
+                else Disposition(str(disposition).upper())
+            )
+        except ValueError:
+            state.status = PipelineStatus.FAILED
+            state.errors.append(AgentError(
+                code="INVALID_DISPOSITION",
+                message="Disposition must be TRUE_HIT, FALSE_POSITIVE, or ESCALATED.",
+                retryable=False,
+            ))
+            state.response_text = "Invalid feedback disposition."
+            return state
+
+        alert, transactions = self._load_alert_context(alert_id)
+        if not alert:
+            state.status = PipelineStatus.FAILED
+            state.errors.append(AgentError(
+                code="ALERT_NOT_FOUND",
+                message="The requested alert could not be found.",
+                retryable=False,
+            ))
+            state.response_text = "Feedback could not be submitted because the alert was not found."
+            return state
+
+        if user_context.role == "AML_ANALYST" and not transactions:
+            self._deny(state, "The alert is outside the permitted operational scope")
+            return state
+
+        pattern_key = self._pattern_key_for_alert(alert, transactions)
+        event = FeedbackEvent(
+            alert_id=alert_id,
+            analyst_profile_id=user_context.profile_id,
+            disposition=parsed_disposition,
+            pattern_key=pattern_key,
+            notes=notes,
+        )
+        self._feedback_store.submit(event)
+        self._audit.log_feedback(state, alert_id, parsed_disposition.value)
+        state.status = PipelineStatus.SUCCESS
+        state.completed_stages.extend(["authorization", "feedback"])
+        state.response_text = (
+            f"Feedback recorded for {alert_id}: {parsed_disposition.value}."
         )
         return state
 
@@ -184,6 +262,23 @@ class Orchestrator:
                 self._deny(state, auth.reason)
                 return False
             state.completed_stages.append("authorization")
+            return True
+
+        if qt == QueryType.ACCESS_REQUEST:
+            resource = self._access_resource(state.query)
+            if (
+                resource == "customer_pii"
+                and "identity" in state.query.lower()
+                and self._rbac.get_field_access(role, "customer.identity_document").value == "DENY"
+            ):
+                self._deny(state, "Identity-document access is restricted for this role")
+                return False
+            auth = self._rbac.authorize(role, resource)
+            if not auth.allowed:
+                self._deny(state, auth.reason)
+                return False
+            state.completed_stages.append("authorization")
+            self._audit.log_authorization(state, True, resource)
             return True
 
         # transaction-related queries
@@ -225,6 +320,7 @@ class Orchestrator:
         # regulatory evidence (via retriever if available)
         if qt in (QueryType.REGULATORY_ONLY, QueryType.REGULATORY_PLUS_TRANSACTION,
                   QueryType.INVESTIGATION):
+            self._ensure_retriever()
             if self._retriever:
                 try:
                     evidence = self._retriever.search(state.query, top_k=5)
@@ -247,6 +343,9 @@ class Orchestrator:
                 authorized.deterministic_signals = signals
 
             # sanctions screening on counterparty names
+            needs_sanctions = qt == QueryType.SANCTIONS or "sanction" in state.query.lower() or "watchlist" in state.query.lower()
+            if needs_sanctions:
+                self._ensure_sanctions()
             if self._sanctions and txns:
                 for txn in txns:
                     cp_name = txn.get("counterparty_name", "")
@@ -260,6 +359,21 @@ class Orchestrator:
                         candidates = self._sanctions.screen_name(cp_name)
                         authorized.sanctions_candidates.extend(candidates)
 
+        if qt == QueryType.ACCESS_REQUEST:
+            resource = self._access_resource(state.query)
+            if resource == "customer_pii" and "account" in state.query.lower():
+                accounts = self._load_accounts(state)
+                authorized.customers = [
+                    self._masking.mask_record(a, role, "account") for a in accounts
+                ]
+                self._audit.log_data_filtered(state, "accounts", len(authorized.customers))
+            elif resource == "customer_pii":
+                customers = self._load_customers(state)
+                authorized.customers = [
+                    self._masking.mask_record(c, role, "customer") for c in customers
+                ]
+                self._audit.log_data_filtered(state, "customers", len(authorized.customers))
+
         # feedback history
         authorized.feedback_history = [
             e.model_dump() for e in self._feedback_store.get_all_events()
@@ -267,6 +381,38 @@ class Orchestrator:
 
         state.authorized_data = authorized
         state.completed_stages.append("data_gathering")
+
+    def _ensure_retriever(self) -> None:
+        if self._retriever_initialized:
+            return
+        self._retriever_initialized = True
+        try:
+            if self._chunks_path.exists():
+                from app.rag.retriever import LocalRegulatoryRetriever
+                self._retriever = LocalRegulatoryRetriever(self._chunks_path)
+                return
+            from app.rag.retriever import RegulatoryRetriever
+            from app.rag.embeddings import EmbeddingEngine
+            qdrant_cfg = self._settings.get("qdrant", {})
+            self._retriever = RegulatoryRetriever(
+                qdrant_url=os.getenv("QDRANT_URL") or qdrant_cfg.get("url", "http://localhost:6333"),
+                collection_name=os.getenv("QDRANT_COLLECTION") or qdrant_cfg.get("collection_name", "regulatory_chunks"),
+                embedding_engine=EmbeddingEngine(),
+            )
+        except Exception as exc:
+            log.warning("retriever_init_failed", error=str(exc)[:150])
+            self._retriever = None
+
+    def _ensure_sanctions(self) -> None:
+        if self._sanctions_initialized:
+            return
+        self._sanctions_initialized = True
+        from app.screening.sanctions import SanctionsScreener
+        self._sanctions = (
+            SanctionsScreener.from_xml(self._sanctions_path)
+            if self._sanctions_path.exists()
+            else SanctionsScreener([])
+        )
 
     def _load_transactions(self, state: AgentState) -> list[dict]:
         """Load transactions from CSV.  In production this queries PostgreSQL."""
@@ -279,45 +425,78 @@ class Orchestrator:
             import pandas as pd
             df = pd.read_csv(csv_path)
 
-            # apply role-based filtering
             role = state.user_context.role
             perms = self._rbac.get_permitted_resources(role)
             txn_access = perms.get("transactions", "denied")
 
             if txn_access == "denied":
                 return []
-            elif txn_access == "flagged_only":
-                # only return flagged transactions (those with alerts)
+            if txn_access == "flagged_only":
                 alerts_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "alerts.csv"
                 if alerts_path.exists():
                     import json as _json
                     alerts_df = pd.read_csv(alerts_path)
                     flagged_ids = set()
-                    # alerts CSV has transaction_ids column with JSON arrays
                     tid_col = "transaction_ids" if "transaction_ids" in alerts_df.columns else "transaction_id"
-                    for val in alerts_df[tid_col].dropna():
+                    for value in alerts_df[tid_col].dropna():
                         try:
-                            parsed = _json.loads(str(val)) if str(val).startswith("[") else [str(val)]
-                            flagged_ids.update(str(x) for x in parsed)
+                            parsed = _json.loads(str(value)) if str(value).startswith("[") else [str(value)]
+                            flagged_ids.update(str(item) for item in parsed)
                         except (ValueError, TypeError):
-                            flagged_ids.add(str(val))
+                            flagged_ids.add(str(value))
                     df = df[df["transaction_id"].astype(str).isin(flagged_ids)]
             elif txn_access == "scoped":
-                # RM: filter by portfolio
                 portfolio_id = state.user_context.portfolio_id
-                if portfolio_id:
-                    customers_path = _PROJECT_ROOT / "data" / "raw" / "customers" / "customers.csv"
-                    if customers_path.exists():
-                        cust_df = pd.read_csv(customers_path)
-                        portfolio_custs = set(
-                            cust_df[cust_df["relationship_manager_id"] == portfolio_id]["customer_id"].astype(str)
-                        )
-                        df = df[df["customer_id"].astype(str).isin(portfolio_custs)]
+                customers_path = _PROJECT_ROOT / "data" / "raw" / "customers" / "customers.csv"
+                if portfolio_id and customers_path.exists():
+                    customers = pd.read_csv(customers_path)
+                    portfolio_customers = set(
+                        customers[customers["relationship_manager_id"] == portfolio_id]["customer_id"].astype(str)
+                    )
+                    df = df[df["customer_id"].astype(str).isin(portfolio_customers)]
 
             return df.to_dict("records")
         except Exception as exc:
             log.error("transaction_load_failed", error=str(exc)[:150])
             return []
+
+    def _load_alert_context(self, alert_id: str) -> tuple[dict | None, list[dict]]:
+        """Load an alert and its referenced transactions from demo data."""
+        alerts_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "alerts.csv"
+        transactions_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "transactions.csv"
+        if not alerts_path.exists() or not transactions_path.exists():
+            return None, []
+
+        import json as _json
+        import pandas as pd
+        alerts = pd.read_csv(alerts_path)
+        matches = alerts[alerts["alert_id"].astype(str) == alert_id]
+        if matches.empty:
+            return None, []
+        alert = matches.iloc[0].to_dict()
+        raw_ids = alert.get("transaction_ids", "[]")
+        try:
+            transaction_ids = _json.loads(raw_ids) if isinstance(raw_ids, str) else list(raw_ids)
+        except (TypeError, ValueError):
+            transaction_ids = [str(raw_ids)]
+        transactions = pd.read_csv(transactions_path)
+        selected = transactions[transactions["transaction_id"].astype(str).isin(map(str, transaction_ids))]
+        return alert, selected.to_dict("records")
+
+    @staticmethod
+    def _pattern_key_for_alert(alert: dict, transactions: list[dict]) -> str:
+        first = transactions[0] if transactions else {}
+        countries = f"{first.get('source_country', '')}-{first.get('destination_country', '')}"
+        velocity = len(transactions)
+        return build_pattern_key(
+            rule_id=str(alert.get("rule_triggered", "UNKNOWN")),
+            transaction_type=str(first.get("transaction_type", "UNKNOWN")),
+            channel=str(first.get("channel", "UNKNOWN")),
+            country_pair=countries,
+            amount_bucket=amount_to_bucket(float(first.get("amount", 0) or 0)),
+            velocity_bucket=velocity_to_bucket(velocity),
+            counterparty_pattern=("NEW_COUNTERPARTY" if first.get("is_new_counterparty") else "KNOWN_COUNTERPARTY"),
+        )
 
     # -- agent execution -----------------------------------------------------
 
@@ -335,7 +514,10 @@ class Orchestrator:
             return state
 
         if qt == QueryType.ACCESS_REQUEST:
-            state.response_text = self._describe_access(state)
+            if self._access_resource(state.query) == "customer_pii":
+                state.response_text = self._render_access_data(state)
+            else:
+                state.response_text = self._describe_access(state)
             state.completed_stages.append("access_request")
             return state
 
@@ -407,6 +589,54 @@ class Orchestrator:
             lines.append(f"   {resource}: {level}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _access_resource(query: str) -> str:
+        return "customer_pii"
+
+    def _load_customers(self, state: AgentState) -> list[dict]:
+        path = _PROJECT_ROOT / "data" / "raw" / "customers" / "customers.csv"
+        if not path.exists():
+            return []
+        import pandas as pd
+        frame = pd.read_csv(path)
+        customer_ids = re.findall(r"CUST_[A-Z0-9_]+", state.query.upper())
+        alert_ids = re.findall(r"ALT_[A-Z0-9_]+", state.query.upper())
+        if alert_ids:
+            alerts_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "alerts.csv"
+            if alerts_path.exists():
+                alerts = pd.read_csv(alerts_path)
+                matched = alerts[alerts["alert_id"].astype(str).isin(alert_ids)]
+                customer_ids.extend(matched.get("customer_id", []).astype(str).tolist())
+        if customer_ids and "customer_id" in frame:
+            frame = frame[frame["customer_id"].astype(str).isin(customer_ids)]
+        return frame.to_dict("records")
+
+    def _load_accounts(self, state: AgentState) -> list[dict]:
+        path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "accounts.csv"
+        if not path.exists():
+            return []
+        import pandas as pd
+        frame = pd.read_csv(path)
+        customer_ids = re.findall(r"CUST_[A-Z0-9_]+", state.query.upper())
+        alert_ids = re.findall(r"ALT_[A-Z0-9_]+", state.query.upper())
+        if alert_ids:
+            alerts_path = _PROJECT_ROOT / "data" / "raw" / "transactions" / "alerts.csv"
+            if alerts_path.exists():
+                alerts = pd.read_csv(alerts_path)
+                matched = alerts[alerts["alert_id"].astype(str).isin(alert_ids)]
+                customer_ids.extend(matched.get("customer_id", []).astype(str).tolist())
+        if customer_ids and "customer_id" in frame:
+            frame = frame[frame["customer_id"].astype(str).isin(customer_ids)]
+        return frame.to_dict("records")
+
+    def _render_access_data(self, state: AgentState) -> str:
+        if not state.authorized_data.customers:
+            return "No authorized matching records were found."
+        lines = ["Authorized records:"]
+        for record in state.authorized_data.customers[:20]:
+            lines.append("  " + ", ".join(f"{key}={value}" for key, value in record.items()))
+        return "\n".join(lines)
+
     def _run_full_pipeline(self, state: AgentState) -> AgentState:
         """Execute the three-agent pipeline with policy validation."""
 
@@ -414,6 +644,8 @@ class Orchestrator:
         self._audit.log_agent_started(state, "COMPLIANCE_SCREENER")
         try:
             state = self._screener.run(state)
+            if any(error.agent_name == "COMPLIANCE_SCREENER" for error in state.errors):
+                raise RuntimeError("Screener returned a failure")
             self._audit.log_agent_completed(state, "COMPLIANCE_SCREENER")
         except Exception as exc:
             log.error("screener_failed", error=str(exc)[:150])
@@ -429,6 +661,8 @@ class Orchestrator:
         self._audit.log_agent_started(state, "INVESTIGATOR")
         try:
             state = self._investigator.run(state)
+            if any(error.agent_name == "INVESTIGATOR" for error in state.errors):
+                raise RuntimeError("Investigator returned a failure")
             self._audit.log_agent_completed(state, "INVESTIGATOR")
         except Exception as exc:
             log.error("investigator_failed", error=str(exc)[:150])
@@ -449,6 +683,8 @@ class Orchestrator:
         self._audit.log_agent_started(state, "RECOMMENDER")
         try:
             state = self._recommender.run(state)
+            if any(error.agent_name == "RECOMMENDER" for error in state.errors):
+                raise RuntimeError("Recommender returned a failure")
             self._audit.log_agent_completed(state, "RECOMMENDER")
             if state.recommendation:
                 self._audit.log_recommendation(state, state.recommendation.suggested_action.value)

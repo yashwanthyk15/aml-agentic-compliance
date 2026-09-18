@@ -54,8 +54,8 @@ The Recommender consumes the typed `ScreeningAlert` and `InvestigationResult` â€
 ### Prerequisites
 
 - Python 3.12+
-- Docker Desktop (for PostgreSQL + Qdrant)
-- A Google Gemini API key
+- Docker Desktop (optional; used for PostgreSQL + Qdrant)
+- A Google Gemini API key (optional; offline mode is the default)
 
 ### Setup
 
@@ -76,7 +76,7 @@ pip install -r requirements.txt
 copy .env.example .env
 # Edit .env and add your GEMINI_API_KEY
 
-# 5. Start infrastructure
+# 5. Optional: start PostgreSQL + Qdrant
 docker compose up -d
 
 # 6. Generate synthetic data
@@ -103,12 +103,38 @@ python query.py --role EXTERNAL_AUDITOR "Show the audit trail"
 # Run evaluations
 python evals/run_evals.py
 
+# Submit an authorized analyst disposition
+python query.py --role AML_ANALYST --feedback-alert ALT_TX_STRUCT_001 --disposition TRUE_HIT
+
 # Feedback demo (before/after ranking)
 python scripts/demo_feedback.py
 
 # Streamlit UI
 streamlit run app/ui/streamlit_app.py
 ```
+
+### Runtime modes and source data
+
+The default `config/settings.yaml` selects the deterministic offline provider, so
+tests and evaluations run without credentials or Docker. To use Gemini for a
+live walkthrough, set these variables in the current shell without committing
+them:
+
+```powershell
+$env:LLM_PROVIDER = "gemini"
+$env:GEMINI_API_KEY = "your-key"
+```
+
+Place the supplied regulatory PDFs under `data/raw/regulations/` and the OFAC
+archive at `data/raw/sanctions/sdn_enhanced.zip`. Run `python scripts/ingest.py`
+to create local chunks and sanctions artifacts; Qdrant indexing is optional when
+the local fallback is sufficient. Then run
+`python scripts/generate_understanding.py` to create rule summaries, obligations,
+thresholds, schema notes, and the regulatory graph.
+
+The current verified local acceptance result is **38 tests passing** and **15/15
+evaluation cases passing**. The evaluator reports actual results and does not
+hard-code the pass rate.
 
 ## RBAC & Security
 

@@ -60,7 +60,7 @@ class RegulatoryChunker:
                             current_chunk_start_page, page.page_number, current_chunk_text
                         ))
                         sequence_number += 1
-                        current_chunk_text = current_chunk_text[-self.chunk_overlap:]
+                        current_chunk_text = self._overlap_text(current_chunk_text)
                         current_chunk_start_page = page.page_number
                 
                 current_chunk_text += line + " "
@@ -81,8 +81,7 @@ class RegulatoryChunker:
                     sequence_number += 1
                     
                     # Keep overlap
-                    overlap_text = current_chunk_text[split_idx - self.chunk_overlap:]
-                    current_chunk_text = overlap_text.strip() + " "
+                    current_chunk_text = self._overlap_text(current_chunk_text[:split_idx]) + " "
                     current_chunk_start_page = page.page_number
                     
         if current_chunk_text.strip():
@@ -93,6 +92,17 @@ class RegulatoryChunker:
             
         logger.info("Created chunks", doc_id=doc_id, num_chunks=len(chunks))
         return chunks
+
+    def _overlap_text(self, text: str) -> str:
+        """Return overlap starting at a complete sentence boundary."""
+        clean_text = text.strip()
+        if not clean_text or self.chunk_overlap <= 0:
+            return ""
+        start = max(0, len(clean_text) - self.chunk_overlap)
+        boundary = clean_text.rfind(". ", 0, start + 1)
+        if boundary >= 0:
+            return clean_text[boundary + 2:].strip()
+        return ""
         
     def _create_chunk(self, doc_id: str, metadata: DocumentMetadata, sequence_number: int, 
                       section_path: list[str], start_page: int, end_page: int, text: str) -> RegulatoryChunk:

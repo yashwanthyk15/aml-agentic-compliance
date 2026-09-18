@@ -72,10 +72,18 @@ def main() -> None:
             '  python query.py --role EXTERNAL_AUDITOR "Show the audit trail"\n'
         ),
     )
-    parser.add_argument("query", help="Natural-language compliance question")
+    parser.add_argument("query", nargs="?", default="", help="Natural-language compliance question")
     parser.add_argument("--role", required=True, help="User role: CCO, AML_ANALYST, EXTERNAL_AUDITOR, RELATIONSHIP_MANAGER")
     parser.add_argument("--profile", default=None, help="Override profile ID")
     parser.add_argument("--portfolio", default=None, help="Portfolio ID (for RELATIONSHIP_MANAGER)")
+    parser.add_argument("--feedback-alert", default=None, help="Submit feedback for an alert ID")
+    parser.add_argument(
+        "--disposition",
+        choices=["TRUE_HIT", "FALSE_POSITIVE", "ESCALATED"],
+        default=None,
+        help="Analyst disposition used with --feedback-alert",
+    )
+    parser.add_argument("--notes", default=None, help="Optional feedback notes")
     parser.add_argument("--json", action="store_true", help="Output raw JSON state instead of formatted text")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug-level logging")
 
@@ -103,7 +111,17 @@ def main() -> None:
 
     try:
         orchestrator = Orchestrator()
-        state = orchestrator.run(args.query, user_ctx)
+        if args.feedback_alert:
+            if not args.disposition:
+                parser.error("--disposition is required with --feedback-alert")
+            state = orchestrator.submit_feedback(
+                alert_id=args.feedback_alert,
+                disposition=args.disposition,
+                user_context=user_ctx,
+                notes=args.notes,
+            )
+        else:
+            state = orchestrator.run(args.query, user_ctx)
     except Exception as exc:
         print(f"\n  [FAIL] System error: {exc}")
         sys.exit(1)

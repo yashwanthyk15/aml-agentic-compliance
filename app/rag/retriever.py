@@ -1,4 +1,7 @@
 import uuid
+import json
+import re
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -105,13 +108,58 @@ class RegulatoryRetriever:
             evidence = RegulatoryEvidence(
                 chunk_id=payload.get("chunk_id", str(uuid.uuid4())),
                 document_id=payload.get("doc_id") or payload.get("document_id") or "FATF_REG",
-                document_version=payload.get("effective_date"),
-                section=payload.get("section_title") or payload.get("section"),
+                document_version=payload.get("document_version") or payload.get("effective_date"),
+                section=(payload.get("section_path") or [payload.get("section")])[-1],
+                section_path=payload.get("section_path", []),
                 text_excerpt=payload.get("text", ""),
                 relevance_score=float(hit.score),
                 page=int(payload.get("page")) if payload.get("page") is not None else None,
-                jurisdiction=payload.get("jurisdiction", "FATF/GLOBAL")
+                jurisdiction=payload.get("jurisdiction", "FATF/GLOBAL"),
+                effective_date=payload.get("effective_date"),
             )
             evidence_list.append(evidence)
             
         return evidence_list
+
+
+class LocalRegulatoryRetriever:
+    """Small local fallback that searches processed chunks without Qdrant."""
+
+    def __init__(self, chunks_path: Path):
+        self.chunks_path = Path(chunks_path)
+        self._chunks: list[dict] = []
+        if self.chunks_path.exists():
+            with open(self.chunks_path, encoding="utf-8") as source:
+                for line in source:
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if chunk.get("text"):
+                        self._chunks.append(chunk)
+
+    def search(self, query: str, top_k: int = 5, **_: object) -> list[RegulatoryEvidence]:
+        query_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
+        ranked = []
+        for chunk in self._chunks:
+            text_terms = set(re.findall(r"[a-z0-9]+", chunk.get("text", "").lower()))
+            overlap = len(query_terms & text_terms)
+            if overlap:
+                score = overlap / max(len(query_terms), 1)
+                ranked.append((score, chunk))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [
+            RegulatoryEvidence(
+                chunk_id=chunk.get("chunk_id"),
+                document_id=chunk.get("document_id", "UNKNOWN"),
+                document_version=chunk.get("effective_date"),
+                section=(chunk.get("section_path") or [None])[-1],
+                section_path=chunk.get("section_path", []),
+                text_excerpt=chunk.get("text", ""),
+                page=chunk.get("page"),
+                jurisdiction=chunk.get("jurisdiction"),
+                effective_date=chunk.get("effective_date"),
+                relevance_score=score,
+            )
+            for score, chunk in ranked[:top_k]
+        ]

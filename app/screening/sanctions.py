@@ -90,16 +90,23 @@ class SanctionsScreener:
         entries = []
         for elem in tree.iter():
             local_name = ET.QName(elem).localname
-            if local_name in ('sdnEntry', 'DistinctParty'):
-                uid = _find_text(elem, 'uid') or _find_text(elem, 'FixedRef') or "Unknown"
+            if local_name in ('sdnEntry', 'DistinctParty', 'entity'):
+                uid = (
+                    _find_text(elem, 'uid')
+                    or _find_text(elem, 'FixedRef')
+                    or _find_text(elem, 'identityId')
+                    or elem.get('id')
+                    or "Unknown"
+                )
                 
                 primary_name = ""
                 aliases = []
                 for name_elem in elem.iter():
-                    if ET.QName(name_elem).localname == 'lastName':
-                        if not primary_name:
+                    name_type = ET.QName(name_elem).localname
+                    if name_type in ('formattedFullName', 'lastName') and name_elem.text:
+                        if name_type == 'formattedFullName' and not primary_name:
                             primary_name = name_elem.text
-                        else:
+                        elif name_elem.text != primary_name:
                             aliases.append(name_elem.text)
                 
                 if not primary_name:
@@ -110,7 +117,11 @@ class SanctionsScreener:
                     primary_name=primary_name,
                     normalized_name=normalize_name(primary_name),
                     aliases=[a for a in aliases if a],
-                    normalized_aliases=[normalize_name(a) for a in aliases if a]
+                    normalized_aliases=[normalize_name(a) for a in aliases if a],
+                    entity_type=_find_text(elem, 'entityType') or "Unknown",
+                    programs=[value for value in (_find_all_text(elem, 'sanctionsProgram')) if value],
+                    countries=[value for value in (_find_all_text(elem, 'isoCode')) if value],
+                    identifiers=[{"type": "document", "value": value} for value in _find_all_text(elem, 'documentNumber') if value],
                 )
                 entries.append(entry)
         
@@ -151,11 +162,17 @@ class SanctionsScreener:
         for score, entry, match_state in candidates[:5]:
             top_candidates.append(
                 SanctionsCandidate(
-                    candidate_id=entry.entry_id,
-                    name=entry.primary_name,
-                    score=score,
+                    entry_id=entry.entry_id,
+                    matched_name=entry.primary_name,
+                    query_name=name,
+                    match_score=score,
                     match_state=match_state,
-                    details={"matched_name": entry.primary_name, "programs": entry.programs}
+                    primary_name=entry.primary_name,
+                    aliases=entry.aliases,
+                    programs=entry.programs,
+                    entity_type=entry.entity_type,
+                    countries=entry.countries,
+                    identifiers=entry.identifiers,
                 )
             )
         
@@ -166,3 +183,11 @@ def _find_text(elem, name):
         if ET.QName(child).localname == name:
             return child.text
     return None
+
+
+def _find_all_text(elem, name):
+    values = []
+    for child in elem.iter():
+        if ET.QName(child).localname == name and child.text:
+            values.append(child.text)
+    return values

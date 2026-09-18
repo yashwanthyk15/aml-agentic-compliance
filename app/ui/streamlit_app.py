@@ -39,7 +39,15 @@ st.sidebar.info(f"**Active Profile:** {profile_id}\n\n**Admin Access:** {is_admi
 # Main query input
 query = st.text_input("Enter your natural language query:", value="Which transactions triggered the structuring rule?")
 
-if st.button("Submit Query", type="primary"):
+st.sidebar.header("Analyst Feedback")
+feedback_alert = st.sidebar.text_input("Alert ID", value="")
+feedback_disposition = st.sidebar.selectbox(
+    "Disposition", ["TRUE_HIT", "FALSE_POSITIVE", "ESCALATED"]
+)
+feedback_notes = st.sidebar.text_area("Notes", value="")
+submit_feedback = st.sidebar.button("Submit Feedback")
+
+if submit_feedback or st.button("Submit Query", type="primary"):
     if not query.strip():
         st.warning("Please enter a query.")
     else:
@@ -55,7 +63,18 @@ if st.button("Submit Query", type="primary"):
         with st.spinner("Processing query through compliance pipeline..."):
             try:
                 orchestrator = Orchestrator()
-                state = orchestrator.run(query, user_ctx)
+                if submit_feedback:
+                    if not feedback_alert.strip():
+                        st.warning("Enter an alert ID before submitting feedback.")
+                        st.stop()
+                    state = orchestrator.submit_feedback(
+                        alert_id=feedback_alert.strip(),
+                        disposition=feedback_disposition,
+                        user_context=user_ctx,
+                        notes=feedback_notes.strip() or None,
+                    )
+                else:
+                    state = orchestrator.run(query, user_ctx)
                 
                 # Status banner
                 status_color = "green" if state.status.value == "SUCCESS" else "orange"

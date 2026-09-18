@@ -76,6 +76,9 @@ class PolicyValidator:
                 overridden_action=overridden,
                 original_action=original,
             )
+            if state.recommendation and overridden:
+                state.recommendation.suggested_action = overridden
+                state.recommendation.requires_human_review = True
             state.status = PipelineStatus.MANUAL_REVIEW_REQUIRED
             log.warning("policy_manual_review", reasons=reasons)
         else:

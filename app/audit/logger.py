@@ -120,9 +120,7 @@ class AuditLogger:
                 if request_id and evt.get("request_id") != request_id:
                     continue
                 events.append(evt)
-                if len(events) >= limit:
-                    break
-        return events
+            return events[-limit:]
 
     # -- internals -----------------------------------------------------------
 

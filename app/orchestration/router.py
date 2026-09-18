@@ -21,6 +21,8 @@ _PATTERNS: list[tuple[QueryType, list[str]]] = [
         r"\bfalse.?positive\b", r"\bescalat",
     ]),
     (QueryType.ACCESS_REQUEST, [
+        r"\bcustomer\s+(information|details|record|data)\b",
+        r"\bidentity.?document\b", r"\baccount.?number\b", r"\baccount holder\b",
         r"\baccess\b.*\brequest\b", r"\bpermission\b", r"\brole\b.*\baccess\b",
     ]),
     (QueryType.AUDIT, [
@@ -65,6 +67,16 @@ def classify_query(query: str) -> QueryType:
         if any(re.search(p, q) for p in patterns):
             log.debug("query_classified", query_type=qtype.value, trigger="pattern")
             return qtype
+
+    if (
+        any(re.search(p, q) for p in _REGULATORY_SIGNALS)
+        and re.search(r"\b(corpus|guidance|recommendations?|regulation)\b", q)
+        and re.search(r"\b(does|what|which|explain|contain)\b", q)
+        and not re.search(r"\b(which transactions|show transactions|flagged transactions)\b", q)
+        and not re.search(r"\b(alert|transaction pattern|observed transaction)\b", q)
+    ):
+        log.debug("query_classified", query_type=QueryType.REGULATORY_ONLY.value, trigger="informational_regulation")
+        return QueryType.REGULATORY_ONLY
 
     has_reg = any(re.search(p, q) for p in _REGULATORY_SIGNALS)
     has_txn = any(re.search(p, q) for p in _TRANSACTION_SIGNALS)

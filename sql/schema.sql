@@ -1,6 +1,8 @@
 -- sql/schema.sql
 -- Core schemas for AML Agent System
 
+\i audit_log.sql
+
 CREATE TABLE IF NOT EXISTS customers (
     customer_id VARCHAR PRIMARY KEY,
     full_name VARCHAR NOT NULL,

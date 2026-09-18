@@ -16,19 +16,13 @@ class MaskingEngine:
             dotted_key = f"{record_type}.{key}"
             access = self.rbac_engine.get_field_access(user_role, dotted_key)
             if access == FieldAccessLevel.DENY:
-                access_bare = self.rbac_engine.get_field_access(user_role, key)
-                if access_bare == FieldAccessLevel.DENY:
-                    continue  # field excluded entirely
-                access = access_bare
+                continue  # field excluded entirely
 
-            if isinstance(value, str):
-                if access == FieldAccessLevel.MASK_PARTIAL:
-                    masked_record[key] = self._apply_partial_mask(value, key)
-                elif access in (FieldAccessLevel.ALLOW, FieldAccessLevel.ALLOW_SCOPED):
-                    masked_record[key] = value
-                # DENY already handled above
-            else:
+            if access == FieldAccessLevel.MASK_PARTIAL:
+                masked_record[key] = self._apply_partial_mask(str(value), key)
+            elif access in (FieldAccessLevel.ALLOW, FieldAccessLevel.ALLOW_SCOPED):
                 masked_record[key] = value
+            # DENY already handled above
         return masked_record
 
     def mask_value(self, value: str, field_name: str, user_role: str) -> Optional[str]:

@@ -14,7 +14,7 @@ import yaml
 from dotenv import load_dotenv
 
 from app.llm.base import LLMProvider
-from app.llm.gemini_provider import GeminiProvider
+from app.llm.offline_provider import OfflineProvider
 
 load_dotenv()
 
@@ -41,9 +41,14 @@ def create_llm_provider(provider_name: str | None = None) -> LLMProvider:
     llm_cfg = settings.get("llm", {})
     runtime_cfg = settings.get("agent_runtime", {})
 
-    name = provider_name or os.getenv("LLM_PROVIDER") or llm_cfg.get("provider", "gemini")
+    name = provider_name or os.getenv("LLM_PROVIDER") or llm_cfg.get("provider", "offline")
+
+    if name in {"offline", "mock", "deterministic"}:
+        return OfflineProvider()
 
     if name == "gemini":
+        from app.llm.gemini_provider import GeminiProvider
+
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise EnvironmentError(
@@ -59,6 +64,6 @@ def create_llm_provider(provider_name: str | None = None) -> LLMProvider:
         )
 
     raise ValueError(
-        f"Unknown LLM provider '{name}'. Supported: gemini. "
+        f"Unknown LLM provider '{name}'. Supported: offline, gemini. "
         f"Add a new provider in app/llm/ and register it here."
     )

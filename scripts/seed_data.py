@@ -131,6 +131,7 @@ def generate_accounts(customers: pd.DataFrame, avg_per_customer: int = 2) -> pd.
         for i in range(num_accounts):
             accounts.append({
                 'account_id': f"ACC_{row['customer_id']}_{i+1}",
+                'account_number': f"{random.randint(10**11, 10**12 - 1)}",
                 'customer_id': row['customer_id'],
                 'account_type': random.choice(['SAVINGS', 'CHECKING', 'BUSINESS']),
                 'currency': random.choice(['USD', 'EUR', 'GBP', 'INR']),
